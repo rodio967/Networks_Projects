@@ -4,9 +4,9 @@ import java.util.*;
 import java.util.concurrent.*;
 
 public class NetworkCloneDetector {
-    private static final int PORT = 8888;
-    private static final int HEARTBEAT_INTERVAL_MS = 2000;
-    private static final int TIMEOUT_MS = 7000;
+    private static final int PORT = 5000;
+    private static final int HEARTBEAT_INTERVAL_MS = 3000;
+    private static final int TIMEOUT_MS = 10000;
 
     private final String groupAddress;
     private MulticastSocket socket;
@@ -27,7 +27,9 @@ public class NetworkCloneDetector {
             multicastGroup = InetAddress.getByName(groupAddress);
 
             socket = new MulticastSocket(PORT);
-            networkInterface = findNetworkInterface();
+//            networkInterface = findNetworkInterface();
+            networkInterface = NetworkInterface.getByName("en0");
+
             if (networkInterface == null) {
                 System.err.println("Не найден подходящий сетевой интерфейс для группы: " + groupAddress);
                 return;
