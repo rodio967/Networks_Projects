@@ -1,11 +1,14 @@
 import java.io.*;
 import java.net.*;
 import java.nio.file.*;
+import java.util.Scanner;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicLong;
 
 public class FileServer {
-
+    private static boolean running = true;
+    private static ServerSocket serverSocket;
+    private static final ExecutorService clientPool = Executors.newCachedThreadPool();
     private static final int BUFFER_SIZE = 1024;
     private static final int FILENAME_MAX_BYTES = 4096;
     private static final Path UPLOADS_DIR = Paths.get("uploads");
@@ -30,20 +33,51 @@ public class FileServer {
             System.exit(1);
         }
 
-        ExecutorService clientPool = Executors.newCachedThreadPool();
+//        ExecutorService clientPool = Executors.newCachedThreadPool();
 
-        try (ServerSocket serverSocket = new ServerSocket(port)) {
+        Thread stopThread = new Thread(() -> {
+            try (Scanner scanner = new Scanner(System.in)) {
+                while (true) {
+                    if (scanner.nextLine().equalsIgnoreCase("exit")) {
+                        stop();
+                        break;
+                    }
+                }
+            }
+        });
+        stopThread.start();
+
+        try {
+            serverSocket = new ServerSocket(port);
             System.out.println("FileServer listening on port " + port);
-            while (true) {
+            while (running) {
                 Socket clientSocket = serverSocket.accept();
                 clientSocket.setTcpNoDelay(true);
                 clientPool.submit(new ClientHandler(clientSocket));
             }
+        } catch (SocketException e) {
+            if (running) {
+                System.err.println("Socket error: " + e.getMessage());
+            }
         } catch (IOException e) {
             System.err.println("Server socket error: " + e.getMessage());
         } finally {
-            clientPool.shutdown();
+            try {
+                stopThread.join();
+            } catch (InterruptedException e) {}
         }
+    }
+
+    public static void stop() {
+        running = false;
+        try {
+            if (serverSocket != null) {
+                serverSocket.close();
+            }
+        } catch (IOException e) {
+            System.err.println("Error closing server socket: " + e.getMessage());
+        }
+        clientPool.shutdown();
     }
 
     private static class ClientHandler implements Runnable {
