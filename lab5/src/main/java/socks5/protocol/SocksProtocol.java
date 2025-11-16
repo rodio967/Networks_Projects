@@ -1,4 +1,4 @@
-package socks5.connection;
+package socks5.protocol;
 
 public class SocksProtocol {
     public static final byte VER = 0x05;

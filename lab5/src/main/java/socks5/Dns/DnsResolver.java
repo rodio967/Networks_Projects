@@ -2,6 +2,8 @@ package socks5.Dns;
 
 import org.xbill.DNS.*;
 import org.xbill.DNS.Record;
+import socks5.connection.context.ConnectionContext;
+import socks5.error.ConnectionErrorHandler;
 import socks5.util.Log;
 import socks5.util.State;
 import socks5.connection.Conn;
@@ -15,10 +17,9 @@ import java.nio.channels.Selector;
 import java.util.HashMap;
 import java.util.Map;
 import java.util.Random;
+import static socks5.protocol.SocksProtocol.*;
 
 public class DnsResolver {
-    private static final byte REP_HOST_UNREACH = 0x04;
-
     private final DatagramChannel dns;
     private final InetSocketAddress dnsServer;
     private final Map<Integer, PendingDns> dnsPending = new HashMap<>();
@@ -40,7 +41,6 @@ public class DnsResolver {
                 int port = isa.getPort() > 0 ? isa.getPort() : 53;
                 InetAddress a = isa.getAddress();
                 if (a instanceof Inet4Address) {
-//                    System.out.println("выбран обычный dns");
                     return new InetSocketAddress(a, port);
                 }
             }
@@ -53,11 +53,15 @@ public class DnsResolver {
     }
 
     public void sendDnsQuery(String qname, Conn requester) throws IOException {
+        ConnectionContext ctx = requester.getConnectionContext();
+
         Name n;
         try {
             n = Name.fromString(qname.endsWith(".") ? qname : qname + ".");
         } catch (TextParseException e) {
-            requester.fail(REP_HOST_UNREACH, "Bad domain");
+            ConnectionErrorHandler errorHandler = requester.getErrorHandler();
+
+            errorHandler.fail(REP_HOST_UNREACH, "Bad domain");
             return;
         }
 
@@ -72,7 +76,8 @@ public class DnsResolver {
         byte[] wire = m.toWire();
         dns.send(ByteBuffer.wrap(wire), dnsServer);
         dnsPending.put(id, new PendingDns(qname, requester));
-        requester.state = State.RESOLVING;
+
+        ctx.setState(State.RESOLVING);
     }
 
     public void handleDnsReadable() throws IOException {
@@ -100,7 +105,8 @@ public class DnsResolver {
             }
 
             if (a == null) {
-                pend.requester.fail(REP_HOST_UNREACH, "No A record");
+                ConnectionErrorHandler errorHandler = pend.requester.getErrorHandler();
+                errorHandler.fail(REP_HOST_UNREACH, "No A record");
             } else {
                 pend.requester.onResolved(a);
             }

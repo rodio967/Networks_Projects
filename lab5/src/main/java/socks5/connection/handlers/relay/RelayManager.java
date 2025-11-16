@@ -1,6 +1,7 @@
-package socks5.connection.relay;
+package socks5.connection.handlers.relay;
 
-import socks5.connection.Conn;
+import socks5.connection.context.ConnectionContext;
+import socks5.selector.SelectorHelper;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -8,24 +9,26 @@ import java.nio.channels.SelectionKey;
 import java.nio.channels.SocketChannel;
 
 public class RelayManager {
-    private final Conn conn;
+    private final ConnectionContext ctx;
     private final Pipe c2r = new Pipe();
     private final Pipe r2c = new Pipe();
 
-    public RelayManager(Conn conn) {
-        this.conn = conn;
+    public RelayManager(ConnectionContext ctx) {
+        this.ctx = ctx;
     }
 
     public void onReadable() throws IOException {
-        SelectionKey clientKey = conn.clientKey;
-        SelectionKey remoteKey = conn.remoteKey;
+        SelectionKey clientKey = ctx.getClientKey();
+        SelectionKey remoteKey = ctx.getRemoteKey();
+        SocketChannel client = ctx.getClient();
+        SocketChannel remote = ctx.getRemote();
 
         if (clientKey.isReadable()) {
-            pump(conn.client, conn.remote, c2r);
+            pump(client, remote, c2r);
         }
 
         if (remoteKey != null && remoteKey.isReadable()) {
-            pump(conn.remote, conn.client, r2c);
+            pump(remote, client, r2c);
         }
 
         updateInterestsRelay();
@@ -33,15 +36,15 @@ public class RelayManager {
     }
 
     public void onWritable() throws IOException {
-        SelectionKey clientKey = conn.clientKey;
-        SelectionKey remoteKey = conn.remoteKey;
+        SelectionKey clientKey = ctx.getClientKey();
+        SelectionKey remoteKey = ctx.getRemoteKey();
 
         if (clientKey.isWritable()) {
-            flush(conn.client, r2c);
+            flush(ctx.getClient(), r2c);
         }
 
         if (remoteKey != null && remoteKey.isWritable()) {
-            flush(conn.remote, c2r);
+            flush(ctx.getRemote(), c2r);
         }
 
         updateInterestsRelay();
@@ -92,15 +95,15 @@ public class RelayManager {
         boolean remoteWrite = c2r.buf.position() > 0 || (c2r.buf.flip().hasRemaining());
         c2r.buf.compact();
 
-        conn.setInterests(conn.clientKey, clientRead, clientWrite, false);
-        if (conn.remoteKey != null) {
-            conn.setInterests(conn.remoteKey, remoteRead, remoteWrite, false);
+        SelectorHelper.setInterests(ctx.getClientKey(), clientRead, clientWrite, false);
+        if (ctx.getRemoteKey() != null) {
+            SelectorHelper.setInterests(ctx.getRemoteKey(), remoteRead, remoteWrite, false);
         }
     }
 
     public void maybeCloseAfterRelay() {
-        boolean clientDone = (!conn.client.isOpen()) || (c2r.srcEof && c2r.sinkShutdown);
-        boolean remoteDone = (conn.remote == null) || (!conn.remote.isOpen()) || (r2c.srcEof && r2c.sinkShutdown);
-        if (clientDone && remoteDone) conn.closeAll();
+        boolean clientDone = (!ctx.getClient().isOpen()) || (c2r.srcEof && c2r.sinkShutdown);
+        boolean remoteDone = (ctx.getRemote() == null) || (!ctx.getRemote().isOpen()) || (r2c.srcEof && r2c.sinkShutdown);
+        if (clientDone && remoteDone) ctx.closeAll();
     }
 }

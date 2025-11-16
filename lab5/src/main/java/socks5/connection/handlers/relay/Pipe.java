@@ -1,4 +1,4 @@
-package socks5.connection.relay;
+package socks5.connection.handlers.relay;
 
 import java.nio.ByteBuffer;
 

@@ -1,22 +1,30 @@
-package socks5.connection.handshake;
+package socks5.connection.handlers.handshake;
 
+import socks5.connection.context.ConnectionContext;
+import socks5.error.ConnectionErrorHandler;
+import socks5.protocol.SocksProtocolWriter;
+import socks5.selector.SelectorHelper;
 import socks5.util.State;
-import socks5.connection.Conn;
 
 import java.io.IOException;
 import java.net.InetAddress;
 import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
+import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
-import static socks5.connection.SocksProtocol.*;
+import static socks5.protocol.SocksProtocol.*;
 
 public class SocksHandshake {
-    private final Conn conn;
+    private final ConnectionContext ctx;
     private final ByteBuffer ctrl;
+    private final SocksProtocolWriter writer;
+    private final ConnectionErrorHandler errorHandler;
 
-    public SocksHandshake(Conn conn) {
-        this.conn = conn;
+    public SocksHandshake(ConnectionContext ctx, SocksProtocolWriter writer, ConnectionErrorHandler errorHandler) {
+        this.ctx = ctx;
         this.ctrl = ByteBuffer.allocate(1024);
+        this.writer = writer;
+        this.errorHandler = errorHandler;
     }
 
 
@@ -25,21 +33,26 @@ public class SocksHandshake {
         resp.put(VER)
                 .put(ok ? METHOD_NO_AUTH : METHOD_REJECT)
                 .flip();
-        conn.client.write(resp);
+        ctx.getClient().write(resp);
 
         if (!ok) {
-            conn.closeAll();
+            ctx.closeAll();
             return;
         }
 
-        conn.state = State.REQUEST;
-        conn.setInterests(conn.clientKey, true, false, false);
+        ctx.setState(State.REQUEST);
+        SelectorHelper.setInterests(ctx.getClientKey(), true, false, false);
     }
 
 
     public void readGreeting() throws IOException {
-        int n = conn.readFromClient(ctrl);
-        if (n <= 0) return;
+        SocketChannel client = ctx.getClient();
+        int n = client.read(ctrl);
+        if (n == -1) {
+            ctx.closeAll();
+            return;
+        }
+        if (n == 0) return;
 
         ctrl.flip();
         if (ctrl.remaining() < 2) {
@@ -50,7 +63,7 @@ public class SocksHandshake {
         byte ver = ctrl.get();
         int nMethods = ctrl.get() & 0xFF;
         if (ver != VER) {
-            conn.closeAll();
+            ctx.closeAll();
             return;
         }
         if (ctrl.remaining() < nMethods) {
@@ -71,14 +84,19 @@ public class SocksHandshake {
         sendMethodSelection(ok);
     }
 
-    public void readRequest() throws IOException {
-        int n = conn.readFromClient(ctrl);
-        if (n <= 0) return;
+    public ConnectionRequest readRequest() throws IOException {
+        SocketChannel client = ctx.getClient();
+        int n = client.read(ctrl);
+        if (n == -1) {
+            ctx.closeAll();
+            return null;
+        }
+        if (n == 0) return null;
 
         ctrl.flip();
         if (ctrl.remaining() < 4) {
             ctrl.compact();
-            return;
+            return null;
         }
 
         byte ver = ctrl.get();
@@ -86,22 +104,22 @@ public class SocksHandshake {
         ctrl.get();
         byte atyp = ctrl.get();
         if (ver != VER || cmd != CMD_CONNECT) {
-            conn.sendReply(REP_CMD_NOT_SUP, new InetSocketAddress("0.0.0.0", 0));
-            conn.closeAll();
-            return;
+            writer.sendReply(REP_CMD_NOT_SUP, new InetSocketAddress("0.0.0.0", 0));
+            ctx.closeAll();
+            return null;
         }
 
-        parseRequestAddress(atyp);
+        return parseRequestAddress(atyp);
     }
 
-    public void parseRequestAddress(byte atyp) throws IOException {
+    public ConnectionRequest parseRequestAddress(byte atyp) throws IOException {
         InetAddress dstAddr = null;
         String domain = null;
         if (atyp == ATYP_IPV4) {
             if (ctrl.remaining() < 4 + 2) {
                 ctrl.position(ctrl.position() - 4);
                 ctrl.compact();
-                return;
+                return null;
             }
 
             byte[] a = new byte[4];
@@ -109,48 +127,43 @@ public class SocksHandshake {
             try {
                 dstAddr = InetAddress.getByAddress(a);
             } catch (Exception e) {
-                conn.fail(REP_ADDR_NOT_SUP, "bad ipv4");
-                return;
+                errorHandler.fail(REP_ADDR_NOT_SUP, "bad ipv4");
+                return null;
             }
 
         } else if (atyp == ATYP_DOMAIN) {
             if (ctrl.remaining() < 1) {
                 ctrl.position(ctrl.position()-4);
                 ctrl.compact();
-                return;
+                return null;
             }
 
             int len = ctrl.get() & 0xFF;
             if (ctrl.remaining() < len + 2) {
                 ctrl.position(ctrl.position()-5);
                 ctrl.compact();
-                return;
+                return null;
             }
 
             byte[] name = new byte[len];
             ctrl.get(name);
             domain = new String(name, StandardCharsets.US_ASCII);
         } else {
-            conn.sendReply(REP_ADDR_NOT_SUP, new InetSocketAddress("0.0.0.0", 0));
-            conn.closeAll();
-            return;
+            writer.sendReply(REP_ADDR_NOT_SUP, new InetSocketAddress("0.0.0.0", 0));
+            ctx.closeAll();
+            return null;
         }
 
         if (ctrl.remaining() < 2) {
             ctrl.compact();
-            return;
+            return null;
         }
 
-        conn.pendingPort = ((ctrl.get() & 0xFF) << 8) | (ctrl.get() & 0xFF);
+        int port = ((ctrl.get() & 0xFF) << 8) | (ctrl.get() & 0xFF);
+        ctx.setPendingPort(port);
         ctrl.clear();
 
-        if (domain != null) {
-            conn.pendingHost = domain;
-            conn.dnsResolver.sendDnsQuery(domain, conn);
-        }
-        else {
-            conn.connectionManager.startConnect(new InetSocketAddress(dstAddr, conn.pendingPort));
-        }
+        return new ConnectionRequest(domain, dstAddr, port);
     }
 
 
