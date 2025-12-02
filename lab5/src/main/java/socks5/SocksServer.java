@@ -43,13 +43,6 @@ public class SocksServer {
                     }
 
                     Object att = key.attachment();
-//                    if (!(att instanceof SuperInterface si)) {
-//                        throw new IllegalStateException();
-//                    }
-//
-//                    switch (si) {
-//
-//                    }
                     if (att instanceof DnsAttachment) {
                         if (key.isReadable()) {
                             dnsResolver.handleDnsReadable();
