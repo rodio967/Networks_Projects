@@ -7,7 +7,11 @@ public class Pipe {
     public boolean srcEof = false;
     public boolean sinkShutdown = false;
 
-    public boolean hasData() {
-        return buf.position() > 0 || buf.flip().hasRemaining();
+    public boolean hasDataToWrite() {
+        return buf.position() > 0;
+    }
+
+    public boolean hasSpaceForRead() {
+        return buf.hasRemaining();
     }
 }

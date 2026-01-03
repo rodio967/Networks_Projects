@@ -25,43 +25,42 @@ public class Conn {
     private final ConnectionErrorHandler errorHandler;
 
     public Conn(SelectionKey clientKey, SocketChannel client, Selector selector, DnsResolver dnsResolver) {
-
         this.ctx = new ConnectionContext(selector, dnsResolver, clientKey, client);
+        this.ctx.setOwner(this);
 
         this.writer = new SocksProtocolWriter(client);
         this.errorHandler = new ConnectionErrorHandler(ctx, writer);
-
         this.handshake = new SocksHandshake(ctx, writer, errorHandler);
         this.connectionManager = new ConnectionManager(ctx, writer, errorHandler);
         this.relayManager = new RelayManager(ctx);
     }
 
-
     public void onConnectable() throws IOException {
         connectionManager.onConnectable();
     }
 
-    public void onReadable() throws IOException {
+    public void onReadable(SelectionKey key) throws IOException {
         switch (ctx.getState()) {
             case GREETING -> handshake.readGreeting();
             case REQUEST -> {
-
                 ConnectionRequest request = handshake.readRequest();
-                handleConnectionRequest(request);
+                if (request != null) {
+                    // можно передавать selector снаружи
+                    handleConnectionRequest(request);
+                }
             }
-            case RELAY -> relayManager.onReadable();
+            case RELAY -> relayManager.onReadable(key);
             default -> {}
         }
     }
 
-    public void onWritable() throws IOException {
+    public void onWritable(SelectionKey key) throws IOException {
         if (ctx.getState() == State.RELAY) {
-            relayManager.onWritable();
+            relayManager.onWritable(key);
         } else {
             SelectorHelper.setInterests(ctx.getClientKey(), true, false, false);
         }
     }
-
 
     public void onResolved(InetAddress ip) throws IOException {
         connectionManager.startConnect(this, new InetSocketAddress(ip, ctx.getPendingPort()));
@@ -78,6 +77,7 @@ public class Conn {
     private void handleConnectionRequest(ConnectionRequest request) throws IOException {
         if (request.isDomain()) {
             ctx.setPendingHost(request.domain());
+            // можно убрать dnsResolver и тут передать его
             ctx.getDnsResolver().sendDnsQuery(request.domain(), this);
         } else {
             connectionManager.startConnect(this, new InetSocketAddress(request.address(), request.port()));

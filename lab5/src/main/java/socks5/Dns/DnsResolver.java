@@ -96,6 +96,10 @@ public class DnsResolver {
             PendingDns pend = dnsPending.remove(id);
             if (pend == null) return;
 
+            if (pend.requester.getConnectionContext().getState() == State.CLOSED) {
+                return;
+            }
+
             InetAddress a = null;
             for (Record r : resp.getSectionArray(Section.ANSWER)) {
                 if (r.getType() == Type.A) {
@@ -105,9 +109,11 @@ public class DnsResolver {
             }
 
             if (a == null) {
+                Log.log("DNS no A record: %s", pend.qname);
                 ConnectionErrorHandler errorHandler = pend.requester.getErrorHandler();
                 errorHandler.fail(REP_HOST_UNREACH, "No A record");
             } else {
+                // убрать else в if добавить return
                 pend.requester.onResolved(a);
             }
         } catch (Exception e) {

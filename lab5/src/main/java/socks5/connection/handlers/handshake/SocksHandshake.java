@@ -131,6 +131,22 @@ public class SocksHandshake {
                 return null;
             }
 
+        } else if (atyp == ATYP_IPV6) {
+            if (ctrl.remaining() < 16 + 2) {
+                ctrl.position(ctrl.position() - 4);
+                ctrl.compact();
+                return null;
+            }
+
+            byte[] a = new byte[16];
+            ctrl.get(a);
+            try {
+                dstAddr = InetAddress.getByAddress(a);
+            } catch (Exception e) {
+                errorHandler.fail(REP_ADDR_NOT_SUP, "bad ipv6");
+                return null;
+            }
+
         } else if (atyp == ATYP_DOMAIN) {
             if (ctrl.remaining() < 1) {
                 ctrl.position(ctrl.position()-4);

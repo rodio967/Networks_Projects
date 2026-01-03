@@ -8,6 +8,7 @@ public class SocksProtocol {
     public static final byte CMD_CONNECT = 0x01;
 
     public static final byte ATYP_IPV4 = 0x01;
+    public static final byte ATYP_IPV6 = 0x04;
     public static final byte ATYP_DOMAIN = 0x03;
 
     public static final byte REP_SUCCEEDED = 0x00;

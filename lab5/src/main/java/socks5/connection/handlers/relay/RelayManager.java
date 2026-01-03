@@ -2,6 +2,7 @@ package socks5.connection.handlers.relay;
 
 import socks5.connection.context.ConnectionContext;
 import socks5.selector.SelectorHelper;
+import socks5.util.Log;
 
 import java.io.IOException;
 import java.nio.ByteBuffer;
@@ -17,93 +18,104 @@ public class RelayManager {
         this.ctx = ctx;
     }
 
-    public void onReadable() throws IOException {
-        SelectionKey clientKey = ctx.getClientKey();
-        SelectionKey remoteKey = ctx.getRemoteKey();
+    public void onReadable(SelectionKey triggeredKey) throws IOException {
         SocketChannel client = ctx.getClient();
         SocketChannel remote = ctx.getRemote();
 
-        if (clientKey.isReadable()) {
-            pump(client, remote, c2r);
+
+        if (triggeredKey == ctx.getClientKey() && client != null && client.isOpen()) {
+            readFromSource(client, c2r);
+            if (remote != null && remote.isOpen()) {
+                writeToDestination(remote, c2r);
+            }
         }
 
-        if (remoteKey != null && remoteKey.isReadable()) {
-            pump(remote, client, r2c);
+        if (triggeredKey == ctx.getRemoteKey() && remote != null && remote.isOpen()) {
+            readFromSource(remote, r2c);
+            if (client != null && client.isOpen()) {
+                writeToDestination(client, r2c);
+            }
         }
 
-        updateInterestsRelay();
-        maybeCloseAfterRelay();
+        updateInterests();
+        maybeClose();
     }
 
-    public void onWritable() throws IOException {
-        SelectionKey clientKey = ctx.getClientKey();
-        SelectionKey remoteKey = ctx.getRemoteKey();
+    public void onWritable(SelectionKey triggeredKey) throws IOException {
+        SocketChannel client = ctx.getClient();
+        SocketChannel remote = ctx.getRemote();
 
-        if (clientKey.isWritable()) {
-            flush(ctx.getClient(), r2c);
+        if (triggeredKey == ctx.getClientKey() && client != null && client.isOpen()) {
+            writeToDestination(client, r2c);
         }
 
-        if (remoteKey != null && remoteKey.isWritable()) {
-            flush(ctx.getRemote(), c2r);
+        if (triggeredKey == ctx.getRemoteKey() && remote != null && remote.isOpen()) {
+            writeToDestination(remote, c2r);
         }
 
-        updateInterestsRelay();
-        maybeCloseAfterRelay();
-
+        updateInterests();
+        maybeClose();
     }
 
-    public void pump(SocketChannel src, SocketChannel dst, Pipe pipe) throws IOException {
-        if (src == null || dst == null) return;
+
+    private void readFromSource(SocketChannel src, Pipe pipe) throws IOException {
+        if (pipe.srcEof) return;
+
         ByteBuffer buf = pipe.buf;
-        if (!buf.hasRemaining()) return;
         int n = src.read(buf);
         if (n == -1) {
             pipe.srcEof = true;
-            return;
         }
-        if (n == 0) return;
-        buf.flip();
-        int wrote = dst.write(buf);
-        buf.compact();
     }
 
-    public void flush(SocketChannel dst, Pipe pipe) throws IOException {
-        if (dst == null) return;
+
+    private void writeToDestination(SocketChannel dst, Pipe pipe) throws IOException {
         ByteBuffer buf = pipe.buf;
         buf.flip();
-        if (!buf.hasRemaining()) {
-            buf.compact();
-            return;
+        if (buf.hasRemaining()) {
+            dst.write(buf);
         }
-        int n = dst.write(buf);
-        buf.compact();
-        if (pipe.srcEof && n >= 0 && buf.position() == 0 && !pipe.sinkShutdown) {
+
+        if (pipe.srcEof && !buf.hasRemaining() && !pipe.sinkShutdown) {
             try {
                 dst.shutdownOutput();
             } catch (IOException ignored) {}
             pipe.sinkShutdown = true;
         }
+
+        buf.compact();
     }
 
+    private void updateInterests() {
+        SelectionKey clientKey = ctx.getClientKey();
+        SelectionKey remoteKey = ctx.getRemoteKey();
 
-    public void updateInterestsRelay() {
-        boolean clientRead = c2r.buf.hasRemaining() && !c2r.srcEof;
-        boolean clientWrite = r2c.buf.position() > 0 || (r2c.buf.flip().hasRemaining());
-        r2c.buf.compact();
+        boolean clientRead = c2r.hasSpaceForRead() && !c2r.srcEof;
+        boolean clientWrite = r2c.hasDataToWrite();
 
-        boolean remoteRead = r2c.buf.hasRemaining() && !r2c.srcEof;
-        boolean remoteWrite = c2r.buf.position() > 0 || (c2r.buf.flip().hasRemaining());
-        c2r.buf.compact();
+        boolean remoteRead = r2c.hasSpaceForRead() && !r2c.srcEof;
+        boolean remoteWrite = c2r.hasDataToWrite();
 
-        SelectorHelper.setInterests(ctx.getClientKey(), clientRead, clientWrite, false);
-        if (ctx.getRemoteKey() != null) {
-            SelectorHelper.setInterests(ctx.getRemoteKey(), remoteRead, remoteWrite, false);
+        if (clientKey != null && clientKey.isValid()) {
+            SelectorHelper.setInterests(clientKey, clientRead, clientWrite, false);
+        }
+
+        if (remoteKey != null && remoteKey.isValid()) {
+            SelectorHelper.setInterests(remoteKey, remoteRead, remoteWrite, false);
         }
     }
 
-    public void maybeCloseAfterRelay() {
-        boolean clientDone = (!ctx.getClient().isOpen()) || (c2r.srcEof && c2r.sinkShutdown);
-        boolean remoteDone = (ctx.getRemote() == null) || (!ctx.getRemote().isOpen()) || (r2c.srcEof && r2c.sinkShutdown);
-        if (clientDone && remoteDone) ctx.closeAll();
+    private void maybeClose() {
+        SocketChannel client = ctx.getClient();
+        SocketChannel remote = ctx.getRemote();
+
+        boolean clientDone = (client == null) || !client.isOpen() ||
+                (c2r.srcEof && c2r.sinkShutdown);
+        boolean remoteDone = (remote == null) || !remote.isOpen() ||
+                (r2c.srcEof && r2c.sinkShutdown);
+
+        if (clientDone && remoteDone) {
+            ctx.closeAll();
+        }
     }
 }

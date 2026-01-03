@@ -1,6 +1,7 @@
 package socks5.connection.context;
 
 import socks5.Dns.DnsResolver;
+import socks5.connection.Conn;
 import socks5.util.State;
 
 import java.io.IOException;
@@ -20,6 +21,7 @@ public class ConnectionContext {
     private State state = State.GREETING;
     private String pendingHost;
     private int pendingPort;
+    private Object owner;
 
     public ConnectionContext(Selector selector, DnsResolver dnsResolver, SelectionKey clientKey, SocketChannel client) {
         this.selector = selector;
@@ -28,6 +30,7 @@ public class ConnectionContext {
         this.client = client;
     }
 
+    public void setOwner(Object owner) { this.owner = owner; }
 
     public Selector getSelector() {return selector;}
 
@@ -73,6 +76,10 @@ public class ConnectionContext {
 
     public void closeAll() {
         state = State.CLOSED;
+
+        if (owner != null && owner instanceof Conn conn) {
+            dnsResolver.clearDns(conn);
+        }
 
         closeQuietly(clientKey, client);
         closeQuietly(remoteKey, remote);

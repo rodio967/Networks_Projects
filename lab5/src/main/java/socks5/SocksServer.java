@@ -22,7 +22,7 @@ public class SocksServer {
         server.configureBlocking(false);
         server.bind(new InetSocketAddress(port));
         server.register(selector, SelectionKey.OP_ACCEPT);
-        
+
         dnsResolver = new DnsResolver(selector);
 
         Log.log("Listening on port %d; DNS server %s", port, dnsResolver.getDnsServer());
@@ -49,15 +49,20 @@ public class SocksServer {
                         }
                     } else if (att instanceof Conn c) {
                         if (key.isConnectable()) c.onConnectable();
-                        if (key.isReadable()) c.onReadable();
-                        if (key.isWritable()) c.onWritable();
+                        if (key.isReadable()) c.onReadable(key);
+                        if (key.isWritable()) c.onWritable(key);
                     }
                 } catch (CancelledKeyException ignored) {
-
                 } catch (SocketException e) {
                     closeKey(key);
+                } catch (IOException e) {
+                    String msg = e.getMessage();
+                    if (msg == null || (!msg.contains("Broken pipe") && !msg.contains("Connection reset"))) {
+                        Log.log("IO error: %s", e.getMessage());
+                    }
+                    closeKey(key);
                 } catch (Throwable t) {
-                    Log.log("Key error: %s", t);
+                    Log.log("Error: %s", t.getMessage());
                     closeKey(key);
                 }
             }
@@ -74,17 +79,13 @@ public class SocksServer {
     }
 
     private static void closeKey(SelectionKey k) {
-        try {
-            k.cancel();
-        } catch (Exception ignored) {}
-        try {
-            k.channel().close();
-        } catch (Exception ignored) {}
+        try { k.cancel(); } catch (Exception ignored) {}
+        try { k.channel().close(); } catch (Exception ignored) {}
     }
 
     public static void main(String[] args) throws IOException {
         if (args.length != 1) {
-            System.out.println("Ошибка, кол-во аргументов должно быть 1");
+            System.out.println("Usage: java SocksServer <port>");
             System.exit(2);
         }
         int port = Integer.parseInt(args[0]);
