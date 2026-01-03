@@ -7,7 +7,6 @@ import socks5.util.Log;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
-import java.net.SocketException;
 import java.nio.channels.*;
 import java.util.Iterator;
 
@@ -31,11 +30,13 @@ public class SocksServer {
     public void run() throws IOException {
         while (true) {
             selector.select();
+
             Iterator<SelectionKey> it = selector.selectedKeys().iterator();
             while (it.hasNext()) {
                 SelectionKey key = it.next();
                 it.remove();
                 if (!key.isValid()) continue;
+
                 try {
                     if (key.isAcceptable()) {
                         handleAccept();
@@ -52,17 +53,7 @@ public class SocksServer {
                         if (key.isReadable()) c.onReadable(key);
                         if (key.isWritable()) c.onWritable(key);
                     }
-                } catch (CancelledKeyException ignored) {
-                } catch (SocketException e) {
-                    closeKey(key);
-                } catch (IOException e) {
-                    String msg = e.getMessage();
-                    if (msg == null || (!msg.contains("Broken pipe") && !msg.contains("Connection reset"))) {
-                        Log.log("IO error: %s", e.getMessage());
-                    }
-                    closeKey(key);
-                } catch (Throwable t) {
-                    Log.log("Error: %s", t.getMessage());
+                } catch (Exception e) {
                     closeKey(key);
                 }
             }
@@ -79,8 +70,13 @@ public class SocksServer {
     }
 
     private static void closeKey(SelectionKey k) {
-        try { k.cancel(); } catch (Exception ignored) {}
-        try { k.channel().close(); } catch (Exception ignored) {}
+        Object att = k.attachment();
+        if (att instanceof Conn c) {
+            c.close();
+        } else {
+            try { k.cancel(); } catch (Exception ignored) {}
+            try { k.channel().close(); } catch (Exception ignored) {}
+        }
     }
 
     public static void main(String[] args) throws IOException {

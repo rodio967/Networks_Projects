@@ -3,7 +3,6 @@ package socks5.Dns;
 import org.xbill.DNS.*;
 import org.xbill.DNS.Record;
 import socks5.connection.context.ConnectionContext;
-import socks5.error.ConnectionErrorHandler;
 import socks5.util.Log;
 import socks5.util.State;
 import socks5.connection.Conn;
@@ -59,9 +58,7 @@ public class DnsResolver {
         try {
             n = Name.fromString(qname.endsWith(".") ? qname : qname + ".");
         } catch (TextParseException e) {
-            ConnectionErrorHandler errorHandler = requester.getErrorHandler();
-
-            errorHandler.fail(REP_HOST_UNREACH, "Bad domain");
+            requester.onDnsFailed("Bad domain: " + qname);
             return;
         }
 
@@ -74,6 +71,7 @@ public class DnsResolver {
         Message m = Message.newQuery(q);
         m.getHeader().setID(id);
         byte[] wire = m.toWire();
+
         dns.send(ByteBuffer.wrap(wire), dnsServer);
         dnsPending.put(id, new PendingDns(qname, requester));
 
@@ -109,15 +107,13 @@ public class DnsResolver {
             }
 
             if (a == null) {
-                Log.log("DNS no A record: %s", pend.qname);
-                ConnectionErrorHandler errorHandler = pend.requester.getErrorHandler();
-                errorHandler.fail(REP_HOST_UNREACH, "No A record");
+                pend.requester.onDnsFailed("No A record: " + pend.qname);
             } else {
                 // убрать else в if добавить return
                 pend.requester.onResolved(a);
             }
         } catch (Exception e) {
-            Log.log("DNS parse error: %s", e);
+            Log.log("DNS parse error: %s", e.getMessage());
         }
     }
 

@@ -14,11 +14,14 @@ public class RelayManager {
     private final Pipe c2r = new Pipe();
     private final Pipe r2c = new Pipe();
 
+    private long totalC2R = 0;
+    private long totalR2C = 0;
+
     public RelayManager(ConnectionContext ctx) {
         this.ctx = ctx;
     }
 
-    public void onReadable(SelectionKey triggeredKey) throws IOException {
+    public boolean onReadable(SelectionKey triggeredKey) throws IOException {
         SocketChannel client = ctx.getClient();
         SocketChannel remote = ctx.getRemote();
 
@@ -38,10 +41,10 @@ public class RelayManager {
         }
 
         updateInterests();
-        maybeClose();
+        return isDone();
     }
 
-    public void onWritable(SelectionKey triggeredKey) throws IOException {
+    public boolean onWritable(SelectionKey triggeredKey) throws IOException {
         SocketChannel client = ctx.getClient();
         SocketChannel remote = ctx.getRemote();
 
@@ -54,7 +57,11 @@ public class RelayManager {
         }
 
         updateInterests();
-        maybeClose();
+        return isDone();
+    }
+
+    public void logStats() {
+        Log.log("CLOSED %d---%d ", totalC2R, totalR2C);
     }
 
 
@@ -105,7 +112,7 @@ public class RelayManager {
         }
     }
 
-    private void maybeClose() {
+    private boolean isDone() {
         SocketChannel client = ctx.getClient();
         SocketChannel remote = ctx.getRemote();
 
@@ -114,8 +121,6 @@ public class RelayManager {
         boolean remoteDone = (remote == null) || !remote.isOpen() ||
                 (r2c.srcEof && r2c.sinkShutdown);
 
-        if (clientDone && remoteDone) {
-            ctx.closeAll();
-        }
+        return clientDone && remoteDone;
     }
 }

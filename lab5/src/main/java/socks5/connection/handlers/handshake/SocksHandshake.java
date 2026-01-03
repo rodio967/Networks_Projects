@@ -1,7 +1,6 @@
 package socks5.connection.handlers.handshake;
 
 import socks5.connection.context.ConnectionContext;
-import socks5.error.ConnectionErrorHandler;
 import socks5.protocol.SocksProtocolWriter;
 import socks5.selector.SelectorHelper;
 import socks5.util.State;
@@ -16,19 +15,17 @@ import static socks5.protocol.SocksProtocol.*;
 
 public class SocksHandshake {
     private final ConnectionContext ctx;
-    private final ByteBuffer ctrl;
+    private final ByteBuffer buf;
     private final SocksProtocolWriter writer;
-    private final ConnectionErrorHandler errorHandler;
 
-    public SocksHandshake(ConnectionContext ctx, SocksProtocolWriter writer, ConnectionErrorHandler errorHandler) {
+    public SocksHandshake(ConnectionContext ctx, SocksProtocolWriter writer) {
         this.ctx = ctx;
-        this.ctrl = ByteBuffer.allocate(1024);
+        this.buf = ByteBuffer.allocate(1024);
         this.writer = writer;
-        this.errorHandler = errorHandler;
     }
 
 
-    public void sendMethodSelection(boolean ok) throws IOException {
+    public boolean sendMethodSelection(boolean ok) throws IOException {
         ByteBuffer resp = ByteBuffer.allocate(2);
         resp.put(VER)
                 .put(ok ? METHOD_NO_AUTH : METHOD_REJECT)
@@ -36,77 +33,77 @@ public class SocksHandshake {
         ctx.getClient().write(resp);
 
         if (!ok) {
-            ctx.closeAll();
-            return;
+            return false;
         }
 
         ctx.setState(State.REQUEST);
         SelectorHelper.setInterests(ctx.getClientKey(), true, false, false);
+
+        return true;
     }
 
 
-    public void readGreeting() throws IOException {
+    public boolean readGreeting() throws IOException {
         SocketChannel client = ctx.getClient();
-        int n = client.read(ctrl);
-        if (n == -1) {
-            ctx.closeAll();
-            return;
-        }
-        if (n == 0) return;
+        int n = client.read(buf);
+        if (n == -1) return false;
+        if (n == 0) return true;
 
-        ctrl.flip();
-        if (ctrl.remaining() < 2) {
-            ctrl.compact();
-            return;
+        buf.flip();
+        if (buf.remaining() < 2) {
+            buf.compact();
+            return true;
         }
 
-        byte ver = ctrl.get();
-        int nMethods = ctrl.get() & 0xFF;
+        byte ver = buf.get();
+        int nMethods = buf.get() & 0xFF;
         if (ver != VER) {
-            ctx.closeAll();
-            return;
+            return false;
         }
-        if (ctrl.remaining() < nMethods) {
-            ctrl.position(ctrl.position()-2);
-            ctrl.compact();
-            return;
+
+        if (buf.remaining() < nMethods) {
+            buf.position(buf.position()-2);
+            buf.compact();
+            return true;
         }
 
 
         boolean ok = false;
         for (int i = 0; i < nMethods; i++){
-            if (ctrl.get() == METHOD_NO_AUTH){
+            if (buf.get() == METHOD_NO_AUTH){
                 ok = true;
             }
         }
-        ctrl.clear();
+        buf.clear();
 
-        sendMethodSelection(ok);
+        return sendMethodSelection(ok);
     }
 
     public ConnectionRequest readRequest() throws IOException {
         SocketChannel client = ctx.getClient();
-        int n = client.read(ctrl);
+        int n = client.read(buf);
         if (n == -1) {
-            ctx.closeAll();
-            return null;
+            return new ConnectionRequest(null, null, 0, REP_GEN_FAIL);
         }
         if (n == 0) return null;
 
-        ctrl.flip();
-        if (ctrl.remaining() < 4) {
-            ctrl.compact();
+        buf.flip();
+        if (buf.remaining() < 4) {
+            buf.compact();
             return null;
         }
 
-        byte ver = ctrl.get();
-        byte cmd = ctrl.get();
-        ctrl.get();
-        byte atyp = ctrl.get();
-        if (ver != VER || cmd != CMD_CONNECT) {
-            writer.sendReply(REP_CMD_NOT_SUP, new InetSocketAddress("0.0.0.0", 0));
-            ctx.closeAll();
-            return null;
+        byte ver = buf.get();
+        byte cmd = buf.get();
+        buf.get();
+        byte atyp = buf.get();
+
+        if (ver != VER) {
+            return new ConnectionRequest(null, null, 0, REP_GEN_FAIL);
+        }
+
+        if (cmd != CMD_CONNECT) {
+            return new ConnectionRequest(null, null, 0, REP_CMD_NOT_SUP);
         }
 
         return parseRequestAddress(atyp);
@@ -116,70 +113,71 @@ public class SocksHandshake {
         InetAddress dstAddr = null;
         String domain = null;
         if (atyp == ATYP_IPV4) {
-            if (ctrl.remaining() < 4 + 2) {
-                ctrl.position(ctrl.position() - 4);
-                ctrl.compact();
+            if (buf.remaining() < 4 + 2) {
+                buf.position(buf.position() - 4);
+                buf.compact();
                 return null;
             }
 
-            byte[] a = new byte[4];
-            ctrl.get(a);
+            byte[] addr = new byte[4];
+            buf.get(addr);
             try {
-                dstAddr = InetAddress.getByAddress(a);
+                dstAddr = InetAddress.getByAddress(addr);
             } catch (Exception e) {
-                errorHandler.fail(REP_ADDR_NOT_SUP, "bad ipv4");
-                return null;
+                return new ConnectionRequest(null, null, 0, REP_ADDR_NOT_SUP);
             }
 
         } else if (atyp == ATYP_IPV6) {
-            if (ctrl.remaining() < 16 + 2) {
-                ctrl.position(ctrl.position() - 4);
-                ctrl.compact();
+            if (buf.remaining() < 16 + 2) {
+                buf.position(buf.position() - 4);
+                buf.compact();
                 return null;
             }
 
             byte[] a = new byte[16];
-            ctrl.get(a);
+            buf.get(a);
             try {
                 dstAddr = InetAddress.getByAddress(a);
             } catch (Exception e) {
-                errorHandler.fail(REP_ADDR_NOT_SUP, "bad ipv6");
-                return null;
+                return new ConnectionRequest(null, null, 0, REP_ADDR_NOT_SUP);
             }
 
         } else if (atyp == ATYP_DOMAIN) {
-            if (ctrl.remaining() < 1) {
-                ctrl.position(ctrl.position()-4);
-                ctrl.compact();
+            if (buf.remaining() < 1) {
+                buf.position(buf.position()-4);
+                buf.compact();
                 return null;
             }
 
-            int len = ctrl.get() & 0xFF;
-            if (ctrl.remaining() < len + 2) {
-                ctrl.position(ctrl.position()-5);
-                ctrl.compact();
+            int len = buf.get() & 0xFF;
+            if (buf.remaining() < len + 2) {
+                buf.position(buf.position()-5);
+                buf.compact();
                 return null;
             }
 
             byte[] name = new byte[len];
-            ctrl.get(name);
+            buf.get(name);
             domain = new String(name, StandardCharsets.US_ASCII);
         } else {
-            writer.sendReply(REP_ADDR_NOT_SUP, new InetSocketAddress("0.0.0.0", 0));
-            ctx.closeAll();
+            return new ConnectionRequest(null, null, 0, REP_ADDR_NOT_SUP);
+        }
+
+        if (buf.remaining() < 2) {
+            buf.compact();
             return null;
         }
 
-        if (ctrl.remaining() < 2) {
-            ctrl.compact();
-            return null;
-        }
+        int port = readPort();
+        buf.clear();
 
-        int port = ((ctrl.get() & 0xFF) << 8) | (ctrl.get() & 0xFF);
+        return new ConnectionRequest(domain, dstAddr, port, (byte) 0);
+    }
+
+    private int readPort() {
+        int port = ((buf.get() & 0xFF) << 8) | (buf.get() & 0xFF);
         ctx.setPendingPort(port);
-        ctrl.clear();
-
-        return new ConnectionRequest(domain, dstAddr, port);
+        return port;
     }
 
 

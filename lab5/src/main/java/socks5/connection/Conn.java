@@ -3,9 +3,9 @@ package socks5.connection;
 import socks5.Dns.DnsResolver;
 import socks5.connection.context.ConnectionContext;
 import socks5.connection.handlers.handshake.ConnectionRequest;
-import socks5.error.ConnectionErrorHandler;
 import socks5.protocol.SocksProtocolWriter;
 import socks5.selector.SelectorHelper;
+import socks5.util.Log;
 import socks5.util.State;
 import socks5.connection.handlers.TcpConnect.ConnectionManager;
 import socks5.connection.handlers.handshake.SocksHandshake;
@@ -15,48 +15,74 @@ import java.io.IOException;
 import java.net.*;
 import java.nio.channels.*;
 
+import static socks5.protocol.SocksProtocol.*;
+
 public class Conn {
     private final ConnectionContext ctx;
+    private final DnsResolver dnsResolver;
+
     private final SocksHandshake handshake;
     private final ConnectionManager connectionManager;
     private final RelayManager relayManager;
 
     private final SocksProtocolWriter writer;
-    private final ConnectionErrorHandler errorHandler;
 
     public Conn(SelectionKey clientKey, SocketChannel client, Selector selector, DnsResolver dnsResolver) {
-        this.ctx = new ConnectionContext(selector, dnsResolver, clientKey, client);
-        this.ctx.setOwner(this);
+        this.ctx = new ConnectionContext(selector, clientKey, client);
 
+        this.dnsResolver = dnsResolver;
         this.writer = new SocksProtocolWriter(client);
-        this.errorHandler = new ConnectionErrorHandler(ctx, writer);
-        this.handshake = new SocksHandshake(ctx, writer, errorHandler);
-        this.connectionManager = new ConnectionManager(ctx, writer, errorHandler);
+
+        this.handshake = new SocksHandshake(ctx, writer);
+        this.connectionManager = new ConnectionManager(ctx, writer);
         this.relayManager = new RelayManager(ctx);
     }
 
     public void onConnectable() throws IOException {
-        connectionManager.onConnectable();
+        try {
+            connectionManager.onConnectable();
+        } catch (ConnectException e) {
+            failQuietly(REP_CONN_REFUSED);
+        } catch (NoRouteToHostException | UnresolvedAddressException e) {
+            failQuietly(REP_HOST_UNREACH);
+        } catch (IOException ioe) {
+            failQuietly(REP_NET_UNREACH);
+        }
     }
 
     public void onReadable(SelectionKey key) throws IOException {
         switch (ctx.getState()) {
-            case GREETING -> handshake.readGreeting();
+            case GREETING -> {
+                if (!handshake.readGreeting()) {
+                    close();
+                }
+            }
             case REQUEST -> {
                 ConnectionRequest request = handshake.readRequest();
                 if (request != null) {
-                    // можно передавать selector снаружи
-                    handleConnectionRequest(request);
+                    if (request.isError()) {
+                        failQuietly(request.errorCode());
+                    } else {
+                        // можно передавать selector снаружи
+                        handleConnectionRequest(request);
+                    }
+                }
+
+            }
+            case RELAY -> {
+                if (relayManager.onReadable(key)) {
+                    close();
                 }
             }
-            case RELAY -> relayManager.onReadable(key);
             default -> {}
         }
     }
 
     public void onWritable(SelectionKey key) throws IOException {
         if (ctx.getState() == State.RELAY) {
-            relayManager.onWritable(key);
+            if (relayManager.onWritable(key)) {
+                close();
+            }
         } else {
             SelectorHelper.setInterests(ctx.getClientKey(), true, false, false);
         }
@@ -66,21 +92,41 @@ public class Conn {
         connectionManager.startConnect(this, new InetSocketAddress(ip, ctx.getPendingPort()));
     }
 
+    public void onDnsFailed(String reason) {
+        Log.log("DNS failed: %s", reason);
+        failQuietly(REP_HOST_UNREACH);
+    }
+
     public ConnectionContext getConnectionContext() {
         return ctx;
     }
 
-    public ConnectionErrorHandler getErrorHandler() {
-        return errorHandler;
-    }
 
     private void handleConnectionRequest(ConnectionRequest request) throws IOException {
         if (request.isDomain()) {
             ctx.setPendingHost(request.domain());
-            // можно убрать dnsResolver и тут передать его
-            ctx.getDnsResolver().sendDnsQuery(request.domain(), this);
+            dnsResolver.sendDnsQuery(request.domain(), this);
         } else {
             connectionManager.startConnect(this, new InetSocketAddress(request.address(), request.port()));
         }
+    }
+
+    public void fail(byte errorCode, String reason) throws IOException {
+        Log.log("FAILED: %s", reason);
+        failQuietly(errorCode);
+    }
+
+    public void failQuietly(byte errorCode) {
+        try {
+            writer.sendErrorReply(errorCode);
+        } catch (IOException ignored) {}
+        close();
+    }
+
+    public void close() {
+        if (ctx.getState() == State.CLOSED) return;
+        dnsResolver.clearDns(this);
+        ctx.closeAll();
+
     }
 }
