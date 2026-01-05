@@ -7,6 +7,7 @@ import socks5.util.Log;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.SocketException;
 import java.nio.channels.*;
 import java.util.Iterator;
 
@@ -53,7 +54,18 @@ public class SocksServer {
                         if (key.isReadable()) c.onReadable(key);
                         if (key.isWritable()) c.onWritable(key);
                     }
-                } catch (Exception e) {
+                } catch (CancelledKeyException ignored) {
+                    // может надо тоже вызвать closeKey?
+                } catch (SocketException e) {
+                    closeKey(key);
+                } catch (IOException e) {
+                    String msg = e.getMessage();
+                    if (msg == null || (!msg.contains("Broken pipe") && !msg.contains("Connection reset"))) {
+                        Log.log("IO error: %s", e.getMessage());
+                    }
+                    closeKey(key);
+                } catch (Throwable t) {
+                    Log.log("Error: %s", t.getMessage());
                     closeKey(key);
                 }
             }

@@ -16,12 +16,10 @@ import static socks5.protocol.SocksProtocol.*;
 public class SocksHandshake {
     private final ConnectionContext ctx;
     private final ByteBuffer buf;
-    private final SocksProtocolWriter writer;
 
-    public SocksHandshake(ConnectionContext ctx, SocksProtocolWriter writer) {
+    public SocksHandshake(ConnectionContext ctx) {
         this.ctx = ctx;
         this.buf = ByteBuffer.allocate(1024);
-        this.writer = writer;
     }
 
 

@@ -3,12 +3,9 @@ import socks5.util.State;
 
 import java.io.IOException;
 import java.nio.channels.SelectionKey;
-import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
 
 public class ConnectionContext {
-    private final Selector selector;
-
     private final SelectionKey clientKey;
     private final SocketChannel client;
     private SelectionKey remoteKey;
@@ -18,13 +15,10 @@ public class ConnectionContext {
     private String pendingHost;
     private int pendingPort;
 
-    public ConnectionContext(Selector selector, SelectionKey clientKey, SocketChannel client) {
-        this.selector = selector;
+    public ConnectionContext(SelectionKey clientKey, SocketChannel client) {
         this.clientKey = clientKey;
         this.client = client;
     }
-
-    public Selector getSelector() {return selector;}
 
     public SelectionKey getClientKey() {return clientKey;}
 

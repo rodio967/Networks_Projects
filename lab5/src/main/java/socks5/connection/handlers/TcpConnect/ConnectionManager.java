@@ -10,6 +10,7 @@ import socks5.connection.Conn;
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.nio.channels.SelectionKey;
+import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
 
 import static socks5.protocol.SocksProtocol.*;
@@ -23,7 +24,7 @@ public class ConnectionManager {
         this.writer = writer;
     }
 
-    public void startConnect(Conn connection, InetSocketAddress dst) throws IOException {
+    public void startConnect(Conn connection, InetSocketAddress dst, Selector selector) throws IOException {
         if (ctx.getRemote() != null && ctx.getRemote().isOpen()) return;
 
         Log.log("CONNECT %s:%d", dst.getHostString(), dst.getPort());
@@ -35,15 +36,13 @@ public class ConnectionManager {
 
         boolean connected = remote.connect(dst);
 
+        int ops = connected ? 0 : SelectionKey.OP_CONNECT;
+        SelectionKey remoteKey = remote.register(selector, ops);
+        remoteKey.attach(connection);
+        ctx.setRemoteKey(remoteKey);
+
         if (connected) {
-            SelectionKey remoteKey = remote.register(ctx.getSelector(), SelectionKey.OP_READ);
-            remoteKey.attach(connection);
-            ctx.setRemoteKey(remoteKey);
             onConnected();
-        } else {
-            SelectionKey remoteKey = remote.register(ctx.getSelector(), SelectionKey.OP_CONNECT);
-            remoteKey.attach(connection);
-            ctx.setRemoteKey(remoteKey);
         }
     }
 

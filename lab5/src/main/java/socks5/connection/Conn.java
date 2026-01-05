@@ -19,6 +19,7 @@ import static socks5.protocol.SocksProtocol.*;
 
 public class Conn {
     private final ConnectionContext ctx;
+    private final Selector selector;
     private final DnsResolver dnsResolver;
 
     private final SocksHandshake handshake;
@@ -28,12 +29,13 @@ public class Conn {
     private final SocksProtocolWriter writer;
 
     public Conn(SelectionKey clientKey, SocketChannel client, Selector selector, DnsResolver dnsResolver) {
-        this.ctx = new ConnectionContext(selector, clientKey, client);
+        this.ctx = new ConnectionContext(clientKey, client);
 
+        this.selector = selector;
         this.dnsResolver = dnsResolver;
         this.writer = new SocksProtocolWriter(client);
 
-        this.handshake = new SocksHandshake(ctx, writer);
+        this.handshake = new SocksHandshake(ctx);
         this.connectionManager = new ConnectionManager(ctx, writer);
         this.relayManager = new RelayManager(ctx);
     }
@@ -89,7 +91,7 @@ public class Conn {
     }
 
     public void onResolved(InetAddress ip) throws IOException {
-        connectionManager.startConnect(this, new InetSocketAddress(ip, ctx.getPendingPort()));
+        connectionManager.startConnect(this, new InetSocketAddress(ip, ctx.getPendingPort()), selector);
     }
 
     public void onDnsFailed(String reason) {
@@ -107,13 +109,8 @@ public class Conn {
             ctx.setPendingHost(request.domain());
             dnsResolver.sendDnsQuery(request.domain(), this);
         } else {
-            connectionManager.startConnect(this, new InetSocketAddress(request.address(), request.port()));
+            connectionManager.startConnect(this, new InetSocketAddress(request.address(), request.port()), selector);
         }
-    }
-
-    public void fail(byte errorCode, String reason) throws IOException {
-        Log.log("FAILED: %s", reason);
-        failQuietly(errorCode);
     }
 
     public void failQuietly(byte errorCode) {
@@ -127,6 +124,5 @@ public class Conn {
         if (ctx.getState() == State.CLOSED) return;
         dnsResolver.clearDns(this);
         ctx.closeAll();
-
     }
 }
