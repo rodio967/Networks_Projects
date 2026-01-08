@@ -9,6 +9,7 @@ import socks5.connection.Conn;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
+import java.net.SocketAddress;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
 import java.nio.channels.SocketChannel;
@@ -42,7 +43,7 @@ public class ConnectionManager {
         ctx.setRemoteKey(remoteKey);
 
         if (connected) {
-            onConnected();
+            onConnected(dst);
         }
     }
 
@@ -54,12 +55,12 @@ public class ConnectionManager {
 
         if (remote != null && remoteKey != null && remoteKey.isConnectable()) {
             if (remote.finishConnect()) {
-                onConnected();
+                onConnected(remote.getRemoteAddress());
             }
         }
     }
 
-    private void onConnected() throws IOException {
+    private void onConnected(SocketAddress dst) throws IOException {
         writer.sendReply(REP_SUCCEEDED, ctx.getRemote().getLocalAddress());
         ctx.setState(State.RELAY);
 
@@ -72,5 +73,7 @@ public class ConnectionManager {
         if (clientKey != null && clientKey.isValid()) {
             SelectorHelper.setInterests(clientKey, true, false, false);
         }
+
+        Log.log("TCP Connected: %s", dst);
     }
 }

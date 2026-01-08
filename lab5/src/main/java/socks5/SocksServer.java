@@ -54,9 +54,7 @@ public class SocksServer {
                         if (key.isReadable()) c.onReadable(key);
                         if (key.isWritable()) c.onWritable(key);
                     }
-                } catch (CancelledKeyException ignored) {
-                    // может надо тоже вызвать closeKey?
-                } catch (SocketException e) {
+                } catch (CancelledKeyException | SocketException ignored) {
                     closeKey(key);
                 } catch (IOException e) {
                     String msg = e.getMessage();

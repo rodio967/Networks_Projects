@@ -84,9 +84,12 @@ public class RelayManager {
         }
 
         if (pipe.srcEof && !buf.hasRemaining() && !pipe.sinkShutdown) {
+            String dstName = (pipe == c2r) ? "remote" : "client";
             try {
                 dst.shutdownOutput();
-            } catch (IOException ignored) {}
+            } catch (IOException e) {
+                Log.log("Failed to shutdown output to %s: %s", dstName, e.getMessage());
+            }
             pipe.sinkShutdown = true;
         }
 

@@ -2,10 +2,9 @@ package socks5.Dns;
 
 import org.xbill.DNS.*;
 import org.xbill.DNS.Record;
-import socks5.connection.context.ConnectionContext;
+import socks5.connection.Conn;
 import socks5.util.Log;
 import socks5.util.State;
-import socks5.connection.Conn;
 
 import java.io.IOException;
 import java.net.*;
@@ -13,16 +12,28 @@ import java.nio.ByteBuffer;
 import java.nio.channels.DatagramChannel;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
-import java.util.HashMap;
 import java.util.Map;
 import java.util.Random;
-import static socks5.protocol.SocksProtocol.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 
 public class DnsResolver {
+    private static final int MAX_ATTEMPTS = 3;
+    private static final int RETRY_DELAY_MS = 3000;
+
+    private final Object sendLock = new Object();
     private final DatagramChannel dns;
     private final InetSocketAddress dnsServer;
-    private final Map<Integer, PendingDns> dnsPending = new HashMap<>();
+    private final Map<Integer, PendingDns> dnsPending = new ConcurrentHashMap<>();
     private final Random rand = new Random();
+
+    private final ScheduledExecutorService scheduler = Executors.newSingleThreadScheduledExecutor(r -> {
+        Thread t = new Thread(r, "dns-retry");
+        t.setDaemon(true);
+        return t;
+    });
 
     public DnsResolver(Selector selector) throws IOException {
         dnsServer = pickDnsServer();
@@ -52,8 +63,6 @@ public class DnsResolver {
     }
 
     public void sendDnsQuery(String qname, Conn requester) throws IOException {
-        ConnectionContext ctx = requester.getConnectionContext();
-
         Name n;
         try {
             n = Name.fromString(qname.endsWith(".") ? qname : qname + ".");
@@ -72,48 +81,90 @@ public class DnsResolver {
         m.getHeader().setID(id);
         byte[] wire = m.toWire();
 
-        dns.send(ByteBuffer.wrap(wire), dnsServer);
-        dnsPending.put(id, new PendingDns(qname, requester));
+        PendingDns pending = new PendingDns(qname, requester, id, wire);
+        dnsPending.put(id, pending);
 
-        ctx.setState(State.RESOLVING);
+        scheduleRetry(id, 0);
+        requester.getConnectionContext().setState(State.RESOLVING);
     }
 
-    public void handleDnsReadable() throws IOException {
-        ByteBuffer buf = ByteBuffer.allocate(1500);
-        SocketAddress from = dns.receive(buf);
+    private void scheduleRetry(int id, int delay) {
+        scheduler.schedule(() -> {
+            PendingDns pending = dnsPending.get(id);
+            if (pending == null) return;
 
-        if (from == null) return;
-        buf.flip();
-        byte[] arr = new byte[buf.remaining()];
-        buf.get(arr);
-
-        try {
-            Message resp = new Message(arr);
-            int id = resp.getHeader().getID();
-
-            PendingDns pend = dnsPending.remove(id);
-            if (pend == null) return;
-
-            if (pend.requester.getConnectionContext().getState() == State.CLOSED) {
+            if (pending.requester.getConnectionContext().getState() == State.CLOSED) {
+                dnsPending.remove(id);
                 return;
             }
 
-            InetAddress a = null;
-            for (Record r : resp.getSectionArray(Section.ANSWER)) {
-                if (r.getType() == Type.A) {
-                    a = ((ARecord) r).getAddress();
-                    break;
-                }
-            }
+            if (pending.attempts < MAX_ATTEMPTS) {
+                try {
+                    synchronized (sendLock) {
+                        dns.send(ByteBuffer.wrap(pending.data), dnsServer);
+                    }
+                    pending.attempts++;
 
-            if (a == null) {
-                pend.requester.onDnsFailed("No A record: " + pend.qname);
+                    if (pending.attempts > 1) {
+                        Log.log("DNS retry #%d for %s", pending.attempts, pending.qname);
+                    }
+
+                    scheduleRetry(id, RETRY_DELAY_MS);
+                } catch (IOException e) {
+                    dnsPending.remove(id);
+                    Log.log("DNS send failed: %s", pending.qname);
+                    pending.requester.close();
+                }
             } else {
-                // убрать else в if добавить return
-                pend.requester.onResolved(a);
+                dnsPending.remove(id);
+                Log.log("DNS timeout after %d attempts: %s", MAX_ATTEMPTS, pending.qname);
+                pending.requester.close();
             }
-        } catch (Exception e) {
-            Log.log("DNS parse error: %s", e.getMessage());
+        }, delay, TimeUnit.MILLISECONDS);
+    }
+
+    public void handleDnsReadable() throws IOException {
+        while (true) {
+            ByteBuffer buf = ByteBuffer.allocate(1500);
+            SocketAddress from = dns.receive(buf);
+
+            if (from == null) break;
+
+            buf.flip();
+            if (buf.remaining() == 0) break;
+
+            byte[] arr = new byte[buf.remaining()];
+            buf.get(arr);
+
+            try {
+                Message resp = new Message(arr);
+                int id = resp.getHeader().getID();
+
+                PendingDns pend = dnsPending.remove(id);
+                if (pend == null) {
+                    continue;
+                }
+
+                if (pend.requester.getConnectionContext().getState() == State.CLOSED) {
+                    continue;
+                }
+
+                InetAddress a = null;
+                for (Record r : resp.getSectionArray(Section.ANSWER)) {
+                    if (r.getType() == Type.A) {
+                        a = ((ARecord) r).getAddress();
+                        break;
+                    }
+                }
+
+                if (a == null) {
+                    pend.requester.onDnsFailed("No A record: " + pend.qname);
+                } else {
+                    pend.requester.onResolved(a);
+                }
+            } catch (Exception e) {
+                Log.log("DNS parse error: %s (%s)", e.getClass().getSimpleName(), e.getMessage());
+            }
         }
     }
 
@@ -121,4 +172,10 @@ public class DnsResolver {
         dnsPending.entrySet().removeIf(e -> e.getValue().requester == conn);
     }
 
+    public void shutdown() {
+        scheduler.shutdownNow();
+        try {
+            dns.close();
+        } catch (IOException ignored) {}
+    }
 }

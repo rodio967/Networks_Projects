@@ -65,7 +65,6 @@ public class Conn {
                     if (request.isError()) {
                         failQuietly(request.errorCode());
                     } else {
-                        // можно передавать selector снаружи
                         handleConnectionRequest(request);
                     }
                 }
@@ -95,7 +94,8 @@ public class Conn {
     }
 
     public void onDnsFailed(String reason) {
-        Log.log("DNS failed: %s", reason);
+        String host = ctx.getPendingHost();
+        Log.log("DNS failed for %s: %s", host != null ? host : "unknown", reason);
         failQuietly(REP_HOST_UNREACH);
     }
 
