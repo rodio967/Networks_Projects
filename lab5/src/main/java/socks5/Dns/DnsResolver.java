@@ -178,4 +178,8 @@ public class DnsResolver {
             dns.close();
         } catch (IOException ignored) {}
     }
+
+    public int getSize() {
+        return dnsPending.size();
+    }
 }

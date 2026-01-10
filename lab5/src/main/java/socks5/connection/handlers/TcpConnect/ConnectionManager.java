@@ -28,7 +28,7 @@ public class ConnectionManager {
     public void startConnect(Conn connection, InetSocketAddress dst, Selector selector) throws IOException {
         if (ctx.getRemote() != null && ctx.getRemote().isOpen()) return;
 
-        Log.log("CONNECT %s:%d", dst.getHostString(), dst.getPort());
+//        Log.log("CONNECT %s:%d", dst.getHostString(), dst.getPort());
 
         SocketChannel remote = SocketChannel.open();
         remote.configureBlocking(false);
@@ -74,6 +74,6 @@ public class ConnectionManager {
             SelectorHelper.setInterests(clientKey, true, false, false);
         }
 
-        Log.log("TCP Connected: %s", dst);
+//        Log.log("TCP Connected: %s", dst);
     }
 }

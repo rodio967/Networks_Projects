@@ -1,6 +1,7 @@
 package socks5.connection;
 
 import socks5.Dns.DnsResolver;
+import socks5.SocksServer;
 import socks5.connection.context.ConnectionContext;
 import socks5.connection.handlers.handshake.ConnectionRequest;
 import socks5.protocol.SocksProtocolWriter;
@@ -38,16 +39,29 @@ public class Conn {
         this.handshake = new SocksHandshake(ctx);
         this.connectionManager = new ConnectionManager(ctx, writer);
         this.relayManager = new RelayManager(ctx);
+
+
+        SocksServer.activeConnections.incrementAndGet();
+        SocksServer.totalConnections.incrementAndGet();
     }
 
     public void onConnectable() throws IOException {
         try {
             connectionManager.onConnectable();
         } catch (ConnectException e) {
+            logConnectionFailure("Error: Connection refused", e);
             failQuietly(REP_CONN_REFUSED);
-        } catch (NoRouteToHostException | UnresolvedAddressException e) {
+        } catch (SocketTimeoutException e) {
+            logConnectionFailure("Error: Connection timeout", e);
+            failQuietly(REP_NET_UNREACH);
+        } catch (NoRouteToHostException e) {
+            logConnectionFailure("Error: No route to host", e);
+            failQuietly(REP_HOST_UNREACH);
+        } catch (UnresolvedAddressException e) {
+            logConnectionFailure("Error: Unresolved address", e);
             failQuietly(REP_HOST_UNREACH);
         } catch (IOException ioe) {
+            logConnectionFailure("Error: Network error", ioe);
             failQuietly(REP_NET_UNREACH);
         }
     }
@@ -113,6 +127,17 @@ public class Conn {
         }
     }
 
+    private void logConnectionFailure(String reason, Exception e) {
+        String host = ctx.getPendingHost();
+        int port = ctx.getPendingPort();
+
+        if (host != null) {
+            Log.log("%s: %s:%d - %s", reason, host, port, e.getMessage());
+        } else {
+            Log.log("%s: %s", reason, e.getMessage());
+        }
+    }
+
     public void failQuietly(byte errorCode) {
         try {
             writer.sendErrorReply(errorCode);
@@ -122,6 +147,7 @@ public class Conn {
 
     public void close() {
         if (ctx.getState() == State.CLOSED) return;
+        SocksServer.activeConnections.decrementAndGet();
         dnsResolver.clearDns(this);
         ctx.closeAll();
     }
