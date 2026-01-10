@@ -5,29 +5,14 @@ import socks5.Dns.DnsResolver;
 import socks5.connection.Conn;
 import socks5.error.ErrorHandler;
 import socks5.util.Log;
-import socks5.util.State;
 
 import java.io.IOException;
 import java.net.InetSocketAddress;
 import java.net.SocketException;
 import java.nio.channels.*;
 import java.util.Iterator;
-import java.util.concurrent.Executors;
-import java.util.concurrent.ScheduledExecutorService;
-import java.util.concurrent.TimeUnit;
-import java.util.concurrent.atomic.AtomicInteger;
-import java.util.concurrent.atomic.AtomicLong;
 
 public class SocksServer {
-    private final ScheduledExecutorService monitor = Executors.newSingleThreadScheduledExecutor(r -> {
-                Thread t = new Thread(r, "memory-monitor");
-                t.setDaemon(true);
-                return t;
-            });
-
-    public static final AtomicInteger activeConnections = new AtomicInteger(0);
-    public static final AtomicLong totalConnections = new AtomicLong(0);
-
     private final Selector selector;
     private final ServerSocketChannel server;
     private final DnsResolver dnsResolver;
@@ -43,14 +28,6 @@ public class SocksServer {
         dnsResolver = new DnsResolver(selector);
 
         Log.log("Listening on port %d; DNS server %s", port, dnsResolver.getDnsServer());
-
-        monitor.scheduleAtFixedRate(() -> {
-            int active = activeConnections.get();
-            long total = totalConnections.get();
-            System.out.println("Size dnsPending: " + dnsResolver.getSize());
-            Log.log("Stats: %d active connections, %d total handled", active, total);
-            MemoryMonitor.logMemoryUsage();
-        }, 10, 10, TimeUnit.SECONDS);
     }
 
     public void run() throws IOException {

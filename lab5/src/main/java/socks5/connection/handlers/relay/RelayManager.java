@@ -14,8 +14,8 @@ public class RelayManager {
     private final Pipe c2r = new Pipe();
     private final Pipe r2c = new Pipe();
 
-    private long totalC2R = 0;
-    private long totalR2C = 0;
+//    private long totalC2R = 0;
+//    private long totalR2C = 0;
 
     public RelayManager(ConnectionContext ctx) {
         this.ctx = ctx;
@@ -60,9 +60,9 @@ public class RelayManager {
         return isDone();
     }
 
-    public void logStats() {
-        Log.log("CLOSED %d---%d ", totalC2R, totalR2C);
-    }
+//    public void logStats() {
+//        Log.log("CLOSED %d---%d ", totalC2R, totalR2C);
+//    }
 
 
     private void readFromSource(SocketChannel src, Pipe pipe) throws IOException {

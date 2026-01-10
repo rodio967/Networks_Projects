@@ -1,13 +1,11 @@
 package socks5.connection.handlers.handshake;
 
 import socks5.connection.context.ConnectionContext;
-import socks5.protocol.SocksProtocolWriter;
 import socks5.selector.SelectorHelper;
 import socks5.util.State;
 
 import java.io.IOException;
 import java.net.InetAddress;
-import java.net.InetSocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.SocketChannel;
 import java.nio.charset.StandardCharsets;
@@ -23,46 +21,39 @@ public class SocksHandshake {
     }
 
 
-    public boolean sendMethodSelection(boolean ok) throws IOException {
+    public void sendMethodSelection(boolean ok) throws IOException {
         ByteBuffer resp = ByteBuffer.allocate(2);
         resp.put(VER)
                 .put(ok ? METHOD_NO_AUTH : METHOD_REJECT)
                 .flip();
         ctx.getClient().write(resp);
-
-        if (!ok) {
-            return false;
-        }
-
-        ctx.setState(State.REQUEST);
-        SelectorHelper.setInterests(ctx.getClientKey(), true, false, false);
-
-        return true;
     }
 
 
-    public boolean readGreeting() throws IOException {
+    public GreetingResult readGreeting() throws IOException {
         SocketChannel client = ctx.getClient();
         int n = client.read(buf);
-        if (n == -1) return false;
-        if (n == 0) return true;
+        if (n == -1) {
+            return GreetingResult.CLIENT_CLOSED;
+        }
+        if (n == 0) return GreetingResult.NEED_MORE_DATA;
 
         buf.flip();
         if (buf.remaining() < 2) {
             buf.compact();
-            return true;
+            return GreetingResult.NEED_MORE_DATA;
         }
 
         byte ver = buf.get();
         int nMethods = buf.get() & 0xFF;
         if (ver != VER) {
-            return false;
+            return GreetingResult.INVALID_VER;
         }
 
         if (buf.remaining() < nMethods) {
-            buf.position(buf.position()-2);
+            buf.position(buf.position() - 2);
             buf.compact();
-            return true;
+            return GreetingResult.NEED_MORE_DATA;
         }
 
 
@@ -74,7 +65,7 @@ public class SocksHandshake {
         }
         buf.clear();
 
-        return sendMethodSelection(ok);
+        return ok ? GreetingResult.OK : GreetingResult.NO_ACCEPTABLE_METHODS;
     }
 
     public ConnectionRequest readRequest() throws IOException {
@@ -170,6 +161,11 @@ public class SocksHandshake {
         buf.clear();
 
         return new ConnectionRequest(domain, dstAddr, port, (byte) 0);
+    }
+
+    public void enterRequestState() {
+        ctx.setState(State.REQUEST);
+        SelectorHelper.setInterests(ctx.getClientKey(), true, false, false);
     }
 
     private int readPort() {

@@ -1,4 +1,4 @@
-package socks5;
+package socks5.monitor;
 
 import socks5.util.Log;
 

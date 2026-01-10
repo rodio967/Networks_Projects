@@ -1,9 +1,9 @@
 package socks5.connection;
 
 import socks5.Dns.DnsResolver;
-import socks5.SocksServer;
 import socks5.connection.context.ConnectionContext;
 import socks5.connection.handlers.handshake.ConnectionRequest;
+import socks5.connection.handlers.handshake.GreetingResult;
 import socks5.protocol.SocksProtocolWriter;
 import socks5.selector.SelectorHelper;
 import socks5.util.Log;
@@ -39,10 +39,6 @@ public class Conn {
         this.handshake = new SocksHandshake(ctx);
         this.connectionManager = new ConnectionManager(ctx, writer);
         this.relayManager = new RelayManager(ctx);
-
-
-        SocksServer.activeConnections.incrementAndGet();
-        SocksServer.totalConnections.incrementAndGet();
     }
 
     public void onConnectable() throws IOException {
@@ -69,8 +65,20 @@ public class Conn {
     public void onReadable(SelectionKey key) throws IOException {
         switch (ctx.getState()) {
             case GREETING -> {
-                if (!handshake.readGreeting()) {
-                    close();
+                GreetingResult result = handshake.readGreeting();
+                switch (result) {
+                    case CLIENT_CLOSED, INVALID_VER -> {
+                        Log.log("Handshake error: %s", result);
+                        close();
+                    }
+                    case OK -> {
+                        handshake.sendMethodSelection(true);
+                        handshake.enterRequestState();
+                    }
+                    case NO_ACCEPTABLE_METHODS -> {
+                        handshake.sendMethodSelection(false);
+                        close();
+                    }
                 }
             }
             case REQUEST -> {
@@ -147,7 +155,6 @@ public class Conn {
 
     public void close() {
         if (ctx.getState() == State.CLOSED) return;
-        SocksServer.activeConnections.decrementAndGet();
         dnsResolver.clearDns(this);
         ctx.closeAll();
     }
