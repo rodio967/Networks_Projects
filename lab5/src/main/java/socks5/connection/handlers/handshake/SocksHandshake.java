@@ -1,5 +1,6 @@
 package socks5.connection.handlers.handshake;
 
+import socks5.auth.AuthConfig;
 import socks5.connection.context.ConnectionContext;
 import socks5.selector.SelectorHelper;
 import socks5.util.State;
@@ -14,8 +15,10 @@ import static socks5.protocol.SocksProtocol.*;
 public class SocksHandshake {
     private final ConnectionContext ctx;
     private final ByteBuffer buf;
+    private final AuthConfig authConfig;
 
-    public SocksHandshake(ConnectionContext ctx) {
+    public SocksHandshake(ConnectionContext ctx, AuthConfig authConfig) {
+        this.authConfig = authConfig;
         this.ctx = ctx;
         this.buf = ByteBuffer.allocate(1024);
     }
@@ -23,8 +26,25 @@ public class SocksHandshake {
 
     public void sendMethodSelection(boolean ok) throws IOException {
         ByteBuffer resp = ByteBuffer.allocate(2);
+        byte method;
+        if (!ok) {
+            method = METHOD_REJECT;
+        } else if (authConfig.isEnabled()) {
+            method = METHOD_USERNAME_PASSWORD;
+        } else {
+            method = METHOD_NO_AUTH;
+        }
+
         resp.put(VER)
-                .put(ok ? METHOD_NO_AUTH : METHOD_REJECT)
+                .put(method)
+                .flip();
+        ctx.getClient().write(resp);
+    }
+
+    public void sendAuthResponse(boolean ok) throws IOException {
+        ByteBuffer resp = ByteBuffer.allocate(2);
+        resp.put(AUTH_VER)
+                .put(ok ? AUTH_SUCCESS : AUTH_FAILURE)
                 .flip();
         ctx.getClient().write(resp);
     }
@@ -56,16 +76,66 @@ public class SocksHandshake {
             return GreetingResult.NEED_MORE_DATA;
         }
 
-
-        boolean ok = false;
+        boolean supportUserPass = false;
+        boolean supportNoAuth = false;
         for (int i = 0; i < nMethods; i++){
-            if (buf.get() == METHOD_NO_AUTH){
-                ok = true;
-            }
+            byte method = buf.get();
+            if (method == METHOD_NO_AUTH) supportNoAuth = true;
+            if (method == METHOD_USERNAME_PASSWORD) supportUserPass = true;
         }
         buf.clear();
 
-        return ok ? GreetingResult.OK : GreetingResult.NO_ACCEPTABLE_METHODS;
+        if (authConfig.isEnabled()) {
+            return supportUserPass ? GreetingResult.OK : GreetingResult.NO_ACCEPTABLE_METHODS;
+        } else {
+            return supportNoAuth ? GreetingResult.OK : GreetingResult.NO_ACCEPTABLE_METHODS;
+        }
+    }
+
+    public AuthResult readAuth() throws IOException {
+        SocketChannel client = ctx.getClient();
+        int n = client.read(buf);
+        if (n == -1) return AuthResult.CLIENT_CLOSED;
+
+        if (n == 0) return AuthResult.NEED_MORE_DATA;
+
+        buf.flip();
+        if (buf.remaining() < 2) {
+            buf.compact();
+            return AuthResult.NEED_MORE_DATA;
+        }
+
+        byte ver = buf.get();
+        if (ver != AUTH_VER) {
+            return AuthResult.INVALID;
+        }
+
+        int ulen = buf.get() & 0xFF;
+        if (buf.remaining() < ulen + 1) {
+            buf.position(buf.position() - 2);
+            buf.compact();
+            return AuthResult.NEED_MORE_DATA;
+        }
+
+        byte[] uname = new byte[ulen];
+        buf.get(uname);
+        String username = new String(uname, StandardCharsets.UTF_8);
+
+        int plen = buf.get() & 0xFF;
+        if (buf.remaining() < plen) {
+            buf.position(buf.position() - ulen - 3);
+            buf.compact();
+            return AuthResult.NEED_MORE_DATA;
+        }
+
+        byte[] pass = new byte[plen];
+        buf.get(pass);
+        String password = new String(pass, StandardCharsets.UTF_8);
+
+        buf.clear();
+
+        boolean valid = authConfig.checkCredentials(username, password);
+        return valid ? AuthResult.SUCCESS : AuthResult.FAILURE;
     }
 
     public ConnectionRequest readRequest() throws IOException {
@@ -163,8 +233,8 @@ public class SocksHandshake {
         return new ConnectionRequest(domain, dstAddr, port, (byte) 0);
     }
 
-    public void enterRequestState() {
-        ctx.setState(State.REQUEST);
+    public void enterState(State state) {
+        ctx.setState(state);
         SelectorHelper.setInterests(ctx.getClientKey(), true, false, false);
     }
 

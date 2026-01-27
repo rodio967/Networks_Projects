@@ -1,7 +1,9 @@
 package socks5.connection;
 
 import socks5.Dns.DnsResolver;
+import socks5.auth.AuthConfig;
 import socks5.connection.context.ConnectionContext;
+import socks5.connection.handlers.handshake.AuthResult;
 import socks5.connection.handlers.handshake.ConnectionRequest;
 import socks5.connection.handlers.handshake.GreetingResult;
 import socks5.protocol.SocksProtocolWriter;
@@ -29,14 +31,18 @@ public class Conn {
 
     private final SocksProtocolWriter writer;
 
-    public Conn(SelectionKey clientKey, SocketChannel client, Selector selector, DnsResolver dnsResolver) {
+    private final AuthConfig authConfig;
+
+    public Conn(SelectionKey clientKey, SocketChannel client, Selector selector, DnsResolver dnsResolver, AuthConfig authConfig) {
         this.ctx = new ConnectionContext(clientKey, client);
 
         this.selector = selector;
         this.dnsResolver = dnsResolver;
         this.writer = new SocksProtocolWriter(client);
 
-        this.handshake = new SocksHandshake(ctx);
+        this.authConfig = authConfig;
+
+        this.handshake = new SocksHandshake(ctx, authConfig);
         this.connectionManager = new ConnectionManager(ctx, writer);
         this.relayManager = new RelayManager(ctx);
     }
@@ -68,12 +74,18 @@ public class Conn {
                 GreetingResult result = handshake.readGreeting();
                 switch (result) {
                     case CLIENT_CLOSED, INVALID_VER -> {
-                        Log.log("Handshake error: %s", result);
+                        Log.log("Handshake Greeting error: %s", result);
                         close();
                     }
                     case OK -> {
                         handshake.sendMethodSelection(true);
-                        handshake.enterRequestState();
+
+                        if (authConfig.isEnabled()) {
+                            handshake.enterState(State.AUTH);
+                        } else {
+                            handshake.enterState(State.REQUEST);
+                        }
+
                     }
                     case NO_ACCEPTABLE_METHODS -> {
                         handshake.sendMethodSelection(false);
@@ -81,6 +93,26 @@ public class Conn {
                     }
                 }
             }
+            case AUTH -> {
+                AuthResult result = handshake.readAuth();
+                switch (result) {
+                    case CLIENT_CLOSED, INVALID -> {
+                        Log.log("Handshake Auth error: %s", result);
+                        close();
+                    }
+                    case SUCCESS -> {
+                        handshake.sendAuthResponse(true);
+                        handshake.enterState(State.REQUEST);
+                    }
+                    case FAILURE -> {
+                        Log.log("Auth failed: invalid credentials");
+                        handshake.sendAuthResponse(false);
+                        close();
+                    }
+                }
+            }
+
+
             case REQUEST -> {
                 ConnectionRequest request = handshake.readRequest();
                 if (request != null) {
